@@ -1,0 +1,8 @@
+# Ignore all MP4 video files
+*.mp4
+
+# Ignore all CSV files
+*.csv
+
+# Ignore the specific file named MELD.Raw.tar.gz
+MELD.Raw.tar.gz
