@@ -130,28 +130,48 @@ class MELDDataset(Dataset):
         
     
     def __getitem__(self, idx):
+
+        if isinstance(idx, torch.Tensor):
+            idx = idx.item()
         row = self.data.iloc[idx]
-        video_filename =f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
-        path = os.path.join(self.video_dir, video_filename)
-        video_path_exist = os.path.exists(path)
+        try:
+            video_filename =f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
+            path = os.path.join(self.video_dir, video_filename)
+            video_path_exist = os.path.exists(path)
 
-        if not video_path_exist:
-            raise FileNotFoundError(f"Video file {video_filename} not found in {self.video_dir}")
-        
-        print("file found")
+            if not video_path_exist:
+                raise FileNotFoundError(f"Video file {video_filename} not found in {self.video_dir}")
+            
+            print("file found")
 
-        text_inputs = self.tokenizer(row['Utterance'],
-                                     padding='max_length',
-                                     truncation=True,
-                                     max_length=128,
-                                     return_tensors="pt")
-        
-        video_frames = self._load_video_frames(path)
-        audio_feature = self._extract_audio_features(path)
+            text_inputs = self.tokenizer(row['Utterance'],
+                                        padding='max_length',
+                                        truncation=True,
+                                        max_length=128,
+                                        return_tensors="pt")
+            
+            video_frames = self._load_video_frames(path)
+            audio_feature = self._extract_audio_features(path)
 
-        emotion_label = self.emotion_map(row['Emotion'].lower())
-        sentiment_label = self.sentiment_map(row['Sentiment'].lower())
-        # print(audio_feature)
+            emotion_label = self.emotion_map(row['Emotion'].lower())
+            sentiment_label = self.sentiment_map(row['Sentiment'].lower())
+
+
+            return {
+                "text_input":{
+                    "input_ids": text_inputs['input_ids'].squeeze(),
+                    "attention_mask": text_inputs['attention_mask'].squeeze()
+                },
+                "video_frames":video_frames,
+                "audio_feature": audio_feature,
+                "emotion_label": torch.tensor(emotion_label),
+                "sentiment_label":torch.tensor(sentiment_label) 
+
+            }
+            # print(audio_feature)\
+        except Exception as e:
+            print(f"Error : {e}")
+            return None
 
 if __name__ == "__main__":
     meld = MELDDataset("../dataset/dev/dev_sent_emo.csv", "../dataset/dev/dev_splits_complete")
