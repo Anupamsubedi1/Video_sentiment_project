@@ -148,7 +148,10 @@ class MELDDataset(Dataset):
         
         video_frames = self._load_video_frames(path)
         audio_feature = self._extract_audio_features(path)
-        print(audio_feature)
+
+        emotion_label = self.emotion_map(row['Emotion'].lower())
+        sentiment_label = self.sentiment_map(row['Sentiment'].lower())
+        # print(audio_feature)
 
 if __name__ == "__main__":
     meld = MELDDataset("../dataset/dev/dev_sent_emo.csv", "../dataset/dev/dev_splits_complete")
