@@ -153,8 +153,8 @@ class MELDDataset(Dataset):
             video_frames = self._load_video_frames(path)
             audio_feature = self._extract_audio_features(path)
 
-            emotion_label = self.emotion_map(row['Emotion'].lower())
-            sentiment_label = self.sentiment_map(row['Sentiment'].lower())
+            emotion_label = self.emotion_map[row['Emotion'].lower()]        
+            sentiment_label = self.sentiment_map[row['Sentiment'].lower()]
 
 
             return {
