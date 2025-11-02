@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import torch
 import subprocess
+import torchaudio
 
 class MELDDataset(Dataset):
     def __init__(self,csv_path, video_dir):
@@ -94,8 +95,37 @@ class MELDDataset(Dataset):
                             "a",
                             audio_path], check=True,stdout= subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
+            waveform, sample_rate = torchaudio.load(audio_path)
+
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
+
+            mel_spectrogram = torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=64,n_fft=1024,hop_length=512)
+            
+            mel_spec = mel_spectrogram(waveform)
+
+            #normalize
+            mel_spec = (mel_spec - mel_spec.mean()) / (mel_spec.std() + 1e-9)
+
+            if mel_spec.size(2) < 300:
+                padding = 300 - mel_spec.size(2)
+                mel_spec = torch.nn.functional.pad(mel_spec, (0, padding))
+
+            else:
+                mel_spec = mel_spec[:, :, :300]
+
+            return mel_spec
+
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"FFmpeg error while extracting audio from : {e}")
+
         except Exception as e:  
             raise ValueError(f"Error extracting audio from {video_path}: {e}")
+        
+        finally:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
 
         
     
@@ -116,9 +146,9 @@ class MELDDataset(Dataset):
                                      max_length=128,
                                      return_tensors="pt")
         
-        # video_frames = self._load_video_frames(path)
-        self._extract_audio_features(path)
-        # print(video_frames)
+        video_frames = self._load_video_frames(path)
+        audio_feature = self._extract_audio_features(path)
+        print(audio_feature)
 
 if __name__ == "__main__":
     meld = MELDDataset("../dataset/dev/dev_sent_emo.csv", "../dataset/dev/dev_splits_complete")
