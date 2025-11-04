@@ -38,6 +38,10 @@ class VideoEncoder(nn.Module):
             nn.Dropout(0.2)
         )
     
+    def forward(self, x):
+        x = x.transpose(1,2)  
+        return self.backbone(x)
+    
     
     
    
