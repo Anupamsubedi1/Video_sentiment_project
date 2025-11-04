@@ -1,5 +1,6 @@
 import torch.nn as nn
 from transformers import BertModel
+from torchvision import models as vision_models
 
 class TextEncoder(nn.Module):
     def __init__(self):
@@ -17,4 +18,26 @@ class TextEncoder(nn.Module):
 
         #use the [CLS] token representation
 
-        pooled_output = outputs.pooler_output
+        pooler_output = outputs.pooler_output
+
+        return self.projection(pooler_output)
+    
+
+class VideoEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = vision_models.video.r3d_18(pretrained=True)
+        
+        for param in self.bert.parameters():
+            param.requires_grad = False
+
+        num_ftrs = self.backbone.fc.in_features
+        self.backbone.fc = nn.Sequential(
+            nn.Linear(num_ftrs, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2)
+        )
+    
+    
+    
+   
