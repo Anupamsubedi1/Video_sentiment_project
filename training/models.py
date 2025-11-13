@@ -31,7 +31,7 @@ class VideoEncoder(nn.Module):
         super().__init__()
         self.backbone = vision_models.video.r3d_18(pretrained=True)
         
-        for param in self.bert.parameters():
+        for param in self.backbone.parameters():
             param.requires_grad = False
 
         num_ftrs = self.backbone.fc.in_features
@@ -137,38 +137,36 @@ class MultimodalSentimentModel(nn.Module):
 
 if __name__ == "__main__":
 
+    # Load a sample from the MELD dataset
     dataset = MELDDataset(
-        "../dataset/train/train_sent_emo.csv","../dataset/train/train_splits"
+        "../dataset/train/train_sent_emo.csv",
+        "../dataset/train/train_splits"
     )
 
     sample = dataset[0]
 
+    # Initialize model
     model = MultimodalSentimentModel()
     model.eval()
 
+    # Prepare inputs (add batch dimension)
     text_input = {
         "input_ids": sample['text_input']['input_ids'].unsqueeze(0),
         "attention_mask": sample['text_input']['attention_mask'].unsqueeze(0)
     }
 
-    Video_frames = sample['video_frames'].unsqueeze(0)
+    video_frames = sample['video_frames'].unsqueeze(0)
     audio_feature = sample['audio_feature'].unsqueeze(0)
 
     with torch.inference_mode():
-        outputs = model(text_input, Video_frames, audio_feature)
+        outputs = model(text_input, video_frames, audio_feature)
 
-        emotion_probs = torch.softmax(outputs['emotion'], dim=1)
-        sentiment_probs = torch.softmax(outputs['sentiment'], dim=1)
+        # Apply softmax to get probabilities
+        emotion_probs = torch.softmax(outputs['emotion'], dim=1)[0]     # shape: [7]
+        sentiment_probs = torch.softmax(outputs['sentiment'], dim=1)[0] # shape: [3]
 
+        # Emotion and sentiment label mappings
         emotion_map = {
-            # "anger": 0,
-            # "disgust": 1,
-            # "fear": 2,
-            # "joy": 3,
-            # "neutral": 4,
-            # "sadness": 5,
-            # "surprise": 6
-
             0: "anger",
             1: "disgust",
             2: "fear",
@@ -179,22 +177,26 @@ if __name__ == "__main__":
         }
 
         sentiment_map = {
-            # "negative": 0,
-            # "neutral": 1,
-            # "positive": 2
-
             0: "negative",
             1: "neutral",
             2: "positive"
-
-            
-
         }
 
-        for i ,prob in enumerate(emotion_probs):
-            print(f"Emotion: {emotion_map[i]}, Probability: {prob.item():.4f}")
+        # Print probabilities for each emotion
+        print("\n=== Emotion Probabilities ===")
+        for i, prob in enumerate(emotion_probs):
+            print(f"{emotion_map[i]:<10}: {prob.item():.4f}")
 
-        for i ,prob in enumerate(sentiment_probs):
-            print(f"Sentiment: {sentiment_map[i]}, Probability: {prob.item():.4f}")
+        # Print probabilities for each sentiment
+        print("\n=== Sentiment Probabilities ===")
+        for i, prob in enumerate(sentiment_probs):
+            print(f"{sentiment_map[i]:<10}: {prob.item():.4f}")
 
-        print("Predictions for utterance")
+        # Get predicted emotion and sentiment (highest probability)
+        pred_emotion_idx = torch.argmax(emotion_probs).item()
+        pred_sentiment_idx = torch.argmax(sentiment_probs).item()
+
+        print("\n=== Final Predictions ===")
+        print(f"Predicted Emotion   : {emotion_map[pred_emotion_idx]}")
+        print(f"Predicted Sentiment : {sentiment_map[pred_sentiment_idx]}")
+        print("\nPredictions for utterance complete ")
