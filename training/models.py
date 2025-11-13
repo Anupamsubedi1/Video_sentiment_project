@@ -3,6 +3,8 @@ import torch
 from transformers import BertModel
 from torchvision import models as vision_models
 
+from meld_dataset import MELDDataset
+
 class TextEncoder(nn.Module):
     def __init__(self):
         super().__init__()
@@ -75,15 +77,124 @@ class AudioEncoder(nn.Module):
     def forward(self, x):
         x= x.squeeze(1)
 
-if __name__ == "__main__":
-    
-    batch_size = 2
-    x = torch.randn(batch_size,1,64, 16000)  
-    
-    print("Input shape:", x.shape)
+        features = self.conv_layers(x)
 
-    x_squeezed = x.squeeze(1)
-    print("Squeezed shape:", x_squeezed.shape)
+        return self.projection(features.squeeze(-1))
     
+
+class MultimodalSentimentModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        #encoders for each modality
+        self.text_encoder = TextEncoder()
+        self.video_encoder = VideoEncoder()
+        self.audio_encoder = AudioEncoder()
+
+
+        #fusion layer
+        self.fusion = nn.Sequential(nn.Linear(128*3,256),
+                                    nn.BatchNorm1d(256),
+                                    nn.ReLU())
+        
+        #classification_head
+
+        self.emotion_classifier = nn.Sequential(
+            nn.Linear(256,64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64,7)  # 7 emotion classes
+        )
+
+        self.sentiment_classifier = nn.Sequential(
+            nn.Linear(256,64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64,3) #negative, neutral, positive
+        )
     
-   
+    def forward(self, text_inputs, video_frames, audio_features):
+        
+        text_features = self.text_encoder(text_inputs['input_ids'], text_inputs['attention_mask'])
+    
+        video_features = self.video_encoder(video_frames)
+        audio_features = self.audio_encoder(audio_features)
+
+
+        combined_features = torch.cat((text_features,
+                                        video_features, 
+                                        audio_features), 
+                                        dim=1)
+        
+        fused_features = self.fusion(combined_features)
+
+        emotion_output = self.emotion_classifier(fused_features)
+        sentiment_output = self.sentiment_classifier(fused_features)
+
+        return {
+            'emotion': emotion_output,
+            'sentiment': sentiment_output
+        }
+
+if __name__ == "__main__":
+
+    dataset = MELDDataset(
+        "../dataset/train/train_sent_emo.csv","../dataset/train/train_splits"
+    )
+
+    sample = dataset[0]
+
+    model = MultimodalSentimentModel()
+    model.eval()
+
+    text_input = {
+        "input_ids": sample['text_input']['input_ids'].unsqueeze(0),
+        "attention_mask": sample['text_input']['attention_mask'].unsqueeze(0)
+    }
+
+    Video_frames = sample['video_frames'].unsqueeze(0)
+    audio_feature = sample['audio_feature'].unsqueeze(0)
+
+    with torch.inference_mode():
+        outputs = model(text_input, Video_frames, audio_feature)
+
+        emotion_probs = torch.softmax(outputs['emotion'], dim=1)
+        sentiment_probs = torch.softmax(outputs['sentiment'], dim=1)
+
+        emotion_map = {
+            # "anger": 0,
+            # "disgust": 1,
+            # "fear": 2,
+            # "joy": 3,
+            # "neutral": 4,
+            # "sadness": 5,
+            # "surprise": 6
+
+            0: "anger",
+            1: "disgust",
+            2: "fear",
+            3: "joy",
+            4: "neutral",
+            5: "sadness",
+            6: "surprise"
+        }
+
+        sentiment_map = {
+            # "negative": 0,
+            # "neutral": 1,
+            # "positive": 2
+
+            0: "negative",
+            1: "neutral",
+            2: "positive"
+
+            
+
+        }
+
+        for i ,prob in enumerate(emotion_probs):
+            print(f"Emotion: {emotion_map[i]}, Probability: {prob.item():.4f}")
+
+        for i ,prob in enumerate(sentiment_probs):
+            print(f"Sentiment: {sentiment_map[i]}, Probability: {prob.item():.4f}")
+
+        print("Predictions for utterance")
