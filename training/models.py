@@ -140,6 +140,14 @@ class MultimodalTrainer:
         self.model =model
         self.train_loader = train_loader
         self.val_loader = val_loader
+
+        #log dataset sized
+
+        train_size = len(train_loader.dataset)
+        val_size = len(val_loader.dataset)
+
+        print("dataset sizes")
+        
         
 
 if __name__ == "__main__":
