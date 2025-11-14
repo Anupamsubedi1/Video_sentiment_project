@@ -1,7 +1,11 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
 from transformers import BertModel
 from torchvision import models as vision_models
+from sklearn.metrics import precision_score, accuracy_score
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+import os
 
 from meld_dataset import MELDDataset
 
@@ -137,18 +141,70 @@ class MultimodalSentimentModel(nn.Module):
 
 class MultimodalTrainer:
     def __init__(self, model, train_loader, val_loader):
-        self.model =model
+        self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
 
-        #log dataset sized
-
+        # Log dataset sized
         train_size = len(train_loader.dataset)
         val_size = len(val_loader.dataset)
+        print("\nDataset sizes:")
+        print(f"Training samples: {train_size:,}")
+        print(f"Validation samples: {val_size:,}")
+        print(f"Batches per epoch: {len(train_loader):,}")
 
-        print("dataset sizes")
+        timestamp = datetime.now().strftime('%b%d_%H-%M-%S')  # Dec17_14-22-35
+        base_dir = '/opt/ml/output/tensorboard' if 'SM_MODEL_DIR' in os.environ else 'runs'
+        log_dir = f"{base_dir}/run_{timestamp}"
+        self.writer = SummaryWriter(log_dir=log_dir)
+        self.global_step = 0
+
+        # Very high: 1, high: 0.1-0.01, medium: 1e-1, low: 1e-4, very low: 1e-5
+        self.optimizer = torch.optim.Adam([
+            {'params': model.text_encoder.parameters(), 'lr': 8e-6},
+            {'params': model.video_encoder.parameters(), 'lr': 8e-5},
+            {'params': model.audio_encoder.parameters(), 'lr': 8e-5},
+            {'params': model.fusion_layer.parameters(), 'lr': 5e-4},
+            {'params': model.emotion_classifier.parameters(), 'lr': 5e-4},
+            {'params': model.sentiment_classifier.parameters(), 'lr': 5e-4}
+        ], weight_decay=1e-5)
+
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode="min",
+            factor=0.1,
+            patience=2
+        )
+
+        self.current_train_losses = None
+
+        # Calculate calss weights
+        print("\nCalculating class weights...")
+        emotion_weights, sentiment_weights = compute_class_weights(
+            train_loader.dataset)
+
+        device = next(model.parameters()).device
+
+        self.emotion_weights = emotion_weights.to(device)
+        self.sentiment_weights = sentiment_weights.to(device)
+
+        print(f"Emotion weights on device: {self.emotion_weights.device}")
+        print(f"Sentiments weights on device: {self.sentiment_weights.device}")
+
+        self.emotion_criterion = nn.CrossEntropyLoss(
+            label_smoothing=0.05,
+            weight=self.emotion_weights
+        )
+
+        self.sentiment_criterion = nn.CrossEntropyLoss(
+            label_smoothing=0.05,
+            weight=self.sentiment_weights
+        )
+
+    
+
         
-        
+
 
 if __name__ == "__main__":
 
