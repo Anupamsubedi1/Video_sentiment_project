@@ -201,7 +201,35 @@ class MultimodalTrainer:
             label_smoothing=0.05,
             weight=self.sentiment_weights
         )
-    
+
+    def log_metrics(self, losses, metrics=None, phase="train"):
+        if phase == "train":
+            self.current_train_losses = losses
+        else:  # Validation phase
+            self.writer.add_scalar(
+                'loss/total/train', self.current_train_losses['total'], self.global_step)
+            self.writer.add_scalar(
+                'loss/total/val', losses['total'], self.global_step)
+
+            self.writer.add_scalar(
+                'loss/emotion/train', self.current_train_losses['emotion'], self.global_step)
+            self.writer.add_scalar(
+                'loss/emotion/val', losses['emotion'], self.global_step)
+
+            self.writer.add_scalar(
+                'loss/sentiment/train', self.current_train_losses['sentiment'], self.global_step)
+            self.writer.add_scalar(
+                'loss/sentiment/val', losses['sentiment'], self.global_step)
+
+        if metrics:
+            self.writer.add_scalar(
+                f'{phase}/emotion_precision', metrics['emotion_precision'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/emotion_accuracy', metrics['emotion_accuracy'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/sentiment_precision', metrics['sentiment_precision'], self.global_step)
+            self.writer.add_scalar(
+                f'{phase}/sentiment_accuracy', metrics['sentiment_accuracy'], self.global_step)
     def train_epoch(self):
         self.model.train()
         running_loss = {'emotion': 0, 'sentiment': 0, 'total': 0}
