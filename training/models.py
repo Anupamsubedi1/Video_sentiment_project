@@ -170,6 +170,9 @@ class MultimodalTrainer:
             {'params': model.sentiment_classifier.parameters(), 'lr': 5e-4}
         ], weight_decay=1e-5)
 
+
+
+
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode="min",
@@ -269,6 +272,15 @@ class MultimodalTrainer:
             running_loss['emotion'] += emotion_loss.item()
             running_loss['sentiment'] += sentiment_loss.item()
 
+            self.log_metrics({
+                'total': total_loss.item(),
+                'emotion': emotion_loss.item(),
+                'sentiment': sentiment_loss.item()
+            },
+            phase='train'
+            )
+            self.global_step += 1
+
             return{k:v/len(self.train_loader) for k,v in running_loss.items()}
         
         def evaluate(self, data_loader, phase='val'):
@@ -319,6 +331,15 @@ class MultimodalTrainer:
             sentiment_precision = precision_score(all_sentiment_labels, all_sentiment_preds, average='weighted')
             emotion_accuracy = accuracy_score(all_emotion_labels, all_emotion_preds)
             sentiment_accuracy = accuracy_score(all_sentiment_labels, all_sentiment_preds)
+            
+            self.log_metrics(avg_loss, {
+                'emotion_precision': emotion_precision,
+                'sentiment_precision': sentiment_precision,
+                'emotion_accuracy': emotion_accuracy,
+                'sentiment_accuracy': sentiment_accuracy
+            },
+            phase=phase
+            )
             if phase == 'val':
                  self.scheduler.step(avg_loss['total'])
             return avg_loss, {
