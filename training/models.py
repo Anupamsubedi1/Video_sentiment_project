@@ -9,57 +9,59 @@ import os
 
 from meld_dataset import MELDDataset
 
+
 class TextEncoder(nn.Module):
     def __init__(self):
         super().__init__()
-        self.bert = BertModel.from_pretrained("bert-base-uncased")
+        self.bert = BertModel.from_pretrained('bert-base-uncased')
 
         for param in self.bert.parameters():
             param.requires_grad = False
 
-        self.projection = nn.Linear(768,128)
-    
+        self.projection = nn.Linear(768, 128)
+
     def forward(self, input_ids, attention_mask):
-        #extract bert embeddings
+        # Extract BERT embeddings
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
 
-        #use the [CLS] token representation
-
+        # Use [CLS] token representation
         pooler_output = outputs.pooler_output
 
         return self.projection(pooler_output)
-    
+
 
 class VideoEncoder(nn.Module):
     def __init__(self):
         super().__init__()
         self.backbone = vision_models.video.r3d_18(pretrained=True)
-        
+
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-        num_ftrs = self.backbone.fc.in_features
+        num_fts = self.backbone.fc.in_features
         self.backbone.fc = nn.Sequential(
-            nn.Linear(num_ftrs, 128),
+            nn.Linear(num_fts, 128),
             nn.ReLU(),
             nn.Dropout(0.2)
         )
-    
+
     def forward(self, x):
-        x = x.transpose(1,2)  
+        # [batch_size, frames, channels, height, width]->[batch_size, channels, frames, height, width]
+        x = x.transpose(1, 2)
         return self.backbone(x)
-    
+
+
 class AudioEncoder(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv_layers = nn.Sequential(
-            #lower level features
-            nn.Conv1d(64,64,kernel_size=3),
+            # Lower level features
+            nn.Conv1d(64, 64, kernel_size=3),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.MaxPool1d(2),
-            #higher level features
-            nn.Conv1d(64,128,kernel_size=3),
+            # Higher level features
+            nn.Conv1d(64, 128, kernel_size=3),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool1d(1)
@@ -69,75 +71,168 @@ class AudioEncoder(nn.Module):
             param.requires_grad = False
 
         self.projection = nn.Sequential(
-            nn.Linear(128,128),
+            nn.Linear(128, 128),
             nn.ReLU(),
             nn.Dropout(0.2)
         )
 
-        def forward(self, x):
-            x = x.squeeze(1)
-            
-
     def forward(self, x):
-        x= x.squeeze(1)
+        x = x.squeeze(1)
 
         features = self.conv_layers(x)
+        # Features output: [batch_size, 128, 1]
 
         return self.projection(features.squeeze(-1))
-    
+
 
 class MultimodalSentimentModel(nn.Module):
     def __init__(self):
         super().__init__()
-        #encoders for each modality
+
+        # Encoders
         self.text_encoder = TextEncoder()
         self.video_encoder = VideoEncoder()
         self.audio_encoder = AudioEncoder()
 
+        # Fusion layer
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(128 * 3, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3)
+        )
 
-        #fusion layer
-        self.fusion = nn.Sequential(nn.Linear(128*3,256),
-                                    nn.BatchNorm1d(256),
-                                    nn.ReLU())
-        
-        #classification_head
-
+        # Classification heads
         self.emotion_classifier = nn.Sequential(
-            nn.Linear(256,64),
+            nn.Linear(256, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(64,7)  # 7 emotion classes
+            nn.Linear(64, 7)  # Sadness, anger
         )
 
         self.sentiment_classifier = nn.Sequential(
-            nn.Linear(256,64),
+            nn.Linear(256, 64),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(64,3) #negative, neutral, positive
+            nn.Linear(64, 3)  # Negative, positive, neutral
         )
-    
+
     def forward(self, text_inputs, video_frames, audio_features):
-        
-        text_features = self.text_encoder(text_inputs['input_ids'], text_inputs['attention_mask'])
-    
+        text_features = self.text_encoder(
+            text_inputs['input_ids'],
+            text_inputs['attention_mask'],
+        )
         video_features = self.video_encoder(video_frames)
         audio_features = self.audio_encoder(audio_features)
 
+        # Concatenate multimodal features
+        combined_features = torch.cat([
+            text_features,
+            video_features,
+            audio_features
+        ], dim=1)  # [batch_size, 128 * 3]
 
-        combined_features = torch.cat((text_features,
-                                        video_features, 
-                                        audio_features), 
-                                        dim=1)
-        
-        fused_features = self.fusion(combined_features)
+        fused_features = self.fusion_layer(combined_features)
 
         emotion_output = self.emotion_classifier(fused_features)
         sentiment_output = self.sentiment_classifier(fused_features)
 
         return {
-            'emotion': emotion_output,
-            'sentiment': sentiment_output
+            'emotions': emotion_output,
+            'sentiments': sentiment_output
         }
+
+
+def compute_class_weights(dataset):
+    emotion_counts = torch.zeros(7)
+    sentiment_counts = torch.zeros(3)
+    skipped = 0
+    total = len(dataset)
+
+    print("\Counting class distributions...")
+    for i in range(total):
+        sample = dataset[i]
+
+        if sample is None:
+            skipped += 1
+            continue
+
+        # Robustly extract emotion_label from different dataset return types
+        emotion_label = None
+        if isinstance(sample, dict):
+            emotion_label = sample.get('emotion_label', None)
+        elif isinstance(sample, (list, tuple)):
+            # look for a scalar tensor/int that represents the label
+            for el in sample:
+                if isinstance(el, torch.Tensor) and el.numel() == 1:
+                    emotion_label = int(el.item())
+                    break
+                if isinstance(el, int):
+                    emotion_label = int(el)
+                    break
+            # fallback to common index if not found
+            if emotion_label is None and len(sample) > 3:
+                 el = sample[3]
+            emotion_label = int(el.item()) if isinstance(el, torch.Tensor) else int(el)
+        else:
+            emotion_label = getattr(sample, 'emotion_label', None)
+
+        if emotion_label is None:
+            skipped += 1
+            continue
+
+        # Robustly extract sentiment_label from different dataset return types
+        sentiment_label = None
+        if isinstance(sample, dict):
+            sentiment_label = sample.get('sentiment_label', None)
+        elif isinstance(sample, (list, tuple)):
+            # look for a scalar tensor/int that represents the label
+            for el in sample:
+                if isinstance(el, torch.Tensor) and el.numel() == 1:
+                    sentiment_label = int(el.item())
+                    break
+                if isinstance(el, int):
+                    sentiment_label = int(el)
+                    break
+            # fallback to common index if not found
+            if sentiment_label is None and len(sample) > 4:
+                el = sample[4]
+                sentiment_label = int(el.item()) if isinstance(el, torch.Tensor) else int(el)
+        else:
+            sentiment_label = getattr(sample, 'sentiment_label', None)
+
+        if sentiment_label is None:
+            skipped += 1
+            continue
+
+        emotion_counts[emotion_label] += 1
+        sentiment_counts[sentiment_label] += 1
+
+    valid = total - skipped
+    print(f"Skipped samples: {skipped}/{total}")
+
+    print("\nClass distribution")
+    print("Emotions:")
+    emotion_map = {0: 'anger', 1: 'disgust', 2: 'fear',
+                   3: 'joy', 4: 'neutral', 5: 'sadness', 6: 'surprise'}
+    for i, count in enumerate(emotion_counts):
+        print(f"{emotion_map[i]}: {count/valid:.2f}")
+
+    print("\nSentiments:")
+    sentiment_map = {0: 'negative', 1: 'neutral', 2: 'positive'}
+    for i, count in enumerate(sentiment_counts):
+        print(f"{sentiment_map[i]}: {count/valid:.2f}")
+
+    # Calculate class weights
+    emotion_weights = 1.0 / emotion_counts
+    sentiment_weights = 1.0 / sentiment_counts
+
+    # Normalize weights
+    emotion_weights = emotion_weights / emotion_weights.sum()
+    sentiment_weights = sentiment_weights / sentiment_weights.sum()
+
+    return emotion_weights, sentiment_weights
+
 
 class MultimodalTrainer:
     def __init__(self, model, train_loader, val_loader):
@@ -164,9 +259,10 @@ class MultimodalTrainer:
             {'params': model.text_encoder.parameters(), 'lr': 8e-6},
             {'params': model.video_encoder.parameters(), 'lr': 8e-5},
             {'params': model.audio_encoder.parameters(), 'lr': 8e-5},
-            {'params': model.fusion.parameters(), 'lr': 5e-4},
+            {'params': model.fusion_layer.parameters(), 'lr': 5e-4},
             {'params': model.emotion_classifier.parameters(), 'lr': 5e-4},
-            {'params': model.sentiment_classifier.parameters(), 'lr': 5e-4}        ], weight_decay=1e-5)
+            {'params': model.sentiment_classifier.parameters(), 'lr': 5e-4}
+        ], weight_decay=1e-5)
 
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
@@ -177,9 +273,10 @@ class MultimodalTrainer:
 
         self.current_train_losses = None
 
-        # Calculate class weights
+        # Calculate calss weights
         print("\nCalculating class weights...")
-        emotion_weights, sentiment_weights = compute_class_weights( train_loader.dataset)
+        emotion_weights, sentiment_weights = compute_class_weights(
+            train_loader.dataset)
 
         device = next(model.parameters()).device
 
@@ -350,114 +447,40 @@ class MultimodalTrainer:
         }
 
 
-def compute_class_weights(dataset):
-    emotion_counts = torch.zeros(7)
-    sentiment_counts = torch.zeros(3)
-    skipped = 0
-    total = len(dataset)
-
-    print("\Counting class distributions...")
-    for i in range(total):
-        sample = dataset[i]
-
-        if sample is None:
-            skipped += 1
-            continue
-
-        emotion_label = sample['emotion_label']
-        sentiment_label = sample['sentiment_label']
-
-        emotion_counts[emotion_label] += 1
-        sentiment_counts[sentiment_label] += 1
-
-    valid = total - skipped
-    print(f"Skipped samples: {skipped}/{total}")
-
-    print("\nClass distribution")
-    print("Emotions:")
-    emotion_map = {0: 'anger', 1: 'disgust', 2: 'fear',
-                   3: 'joy', 4: 'neutral', 5: 'sadness', 6: 'surprise'}
-    for i, count in enumerate(emotion_counts):
-        print(f"{emotion_map[i]}: {count/valid:.2f}")
-
-    print("\nSentiments:")
-    sentiment_map = {0: 'negative', 1: 'neutral', 2: 'positive'}
-    for i, count in enumerate(sentiment_counts):
-        print(f"{sentiment_map[i]}: {count/valid:.2f}")
-
-    # Calculate class weights
-    emotion_weights = 1.0 / emotion_counts
-    sentiment_weights = 1.0 / sentiment_counts
-
-    # Normalize weights
-    emotion_weights = emotion_weights / emotion_weights.sum()
-    sentiment_weights = sentiment_weights / sentiment_weights.sum()
-
-    return emotion_weights, sentiment_weights
-
-
 if __name__ == "__main__":
-
-    # Load a sample from the MELD dataset
     dataset = MELDDataset(
-        "../dataset/train/train_sent_emo.csv",
-        "../dataset/train/train_splits"
-    )
+        '../dataset/train/train_sent_emo.csv', '../dataset/train/train_splits')
 
     sample = dataset[0]
 
-    # Initialize model
     model = MultimodalSentimentModel()
     model.eval()
 
-    # Prepare inputs (add batch dimension)
-    text_input = {
-        "input_ids": sample['text_input']['input_ids'].unsqueeze(0),
-        "attention_mask": sample['text_input']['attention_mask'].unsqueeze(0)
+    text_inputs = {
+        'input_ids': sample['text_inputs']['input_ids'].unsqueeze(0),
+        'attention_mask': sample['text_inputs']['attention_mask'].unsqueeze(0)
     }
-
     video_frames = sample['video_frames'].unsqueeze(0)
-    audio_feature = sample['audio_feature'].unsqueeze(0)
+    audio_features = sample['audio_features'].unsqueeze(0)
 
     with torch.inference_mode():
-        outputs = model(text_input, video_frames, audio_feature)
+        outputs = model(text_inputs, video_frames, audio_features)
 
-        # Apply softmax to get probabilities
-        emotion_probs = torch.softmax(outputs['emotion'], dim=1)[0]     # shape: [7]
-        sentiment_probs = torch.softmax(outputs['sentiment'], dim=1)[0] # shape: [3]
+        emotion_probs = torch.softmax(outputs['emotions'], dim=1)[0]
+        sentiment_probs = torch.softmax(outputs['sentiments'], dim=1)[0]
 
-        # Emotion and sentiment label mappings
-        emotion_map = {
-            0: "anger",
-            1: "disgust",
-            2: "fear",
-            3: "joy",
-            4: "neutral",
-            5: "sadness",
-            6: "surprise"
-        }
+    emotion_map = {
+        0: 'anger', 1: 'disgust', 2: 'fear', 3: 'joy', 4: 'neutral', 5: 'sadness', 6: 'surprise'
+    }
 
-        sentiment_map = {
-            0: "negative",
-            1: "neutral",
-            2: "positive"
-        }
+    sentiment_map = {
+        0: 'negative', 1: 'neutral', 2: 'positive'
+    }
 
-        # Print probabilities for each emotion
-        print("\n=== Emotion Probabilities ===")
-        for i, prob in enumerate(emotion_probs):
-            print(f"{emotion_map[i]:<10}: {prob.item():.4f}")
+    for i, prob in enumerate(emotion_probs):
+        print(f"{emotion_map[i]}: {prob:.2f}")
 
-        # Print probabilities for each sentiment
-        print("\n=== Sentiment Probabilities ===")
-        for i, prob in enumerate(sentiment_probs):
-            print(f"{sentiment_map[i]:<10}: {prob.item():.4f}")
+    for i, prob in enumerate(sentiment_probs):
+        print(f"{sentiment_map[i]}: {prob:.2f}")
 
-        # Get predicted emotion and sentiment (highest probability)
-        pred_emotion_idx = torch.argmax(emotion_probs).item()
-        pred_sentiment_idx = torch.argmax(sentiment_probs).item()
-
-        print("\n=== Final Predictions ===")
-        print(f"Predicted Emotion   : {emotion_map[pred_emotion_idx]}")
-        print(f"Predicted Sentiment : {sentiment_map[pred_sentiment_idx]}")
-        print("\nPredictions for utterance complete ")
+    print("Predictions for utterance")
