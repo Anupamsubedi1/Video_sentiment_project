@@ -179,8 +179,7 @@ class MultimodalTrainer:
 
         # Calculate class weights
         print("\nCalculating class weights...")
-        emotion_weights, sentiment_weights = compute_class_weights(
-            train_loader.dataset)
+        emotion_weights, sentiment_weights = compute_class_weights( train_loader.dataset)
 
         device = next(model.parameters()).device
 
